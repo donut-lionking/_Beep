@@ -202,6 +202,28 @@ body {
 .pill.active { background: var(--green-dark); border-color: var(--green-dark); color: white; }
 .pill.gold.active { background: var(--gold); border-color: var(--gold); color: var(--ink); }
 
+/* Settings */
+.settings-card summary {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.settings-card[open] summary { margin-bottom: .75rem; }
+.key-input {
+  flex: 1;
+  min-width: 180px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: var(--ink);
+  background: white;
+}
+.key-status { font-size: 11px; color: var(--ink-soft); line-height: 1.5; }
+
 /* Analyse button */
 .analyse-btn {
   width: 100%;
@@ -468,6 +490,14 @@ body {
         <button class="pill" id="win-moon" onclick="togglePill('win-moon')">Moon/last tile 海底撈月 +1</button>
       </div>
     </div>
+    <div class="context-row">
+      <span class="context-label">Blessing?</span>
+      <div class="pill-group">
+        <button class="pill" id="win-heaven" onclick="togglePill('win-heaven')">Heaven 天糊 13</button>
+        <button class="pill" id="win-earth" onclick="togglePill('win-earth')">Earth 地糊 13</button>
+        <button class="pill" id="win-man" onclick="togglePill('win-man')">Man 人糊 13</button>
+      </div>
+    </div>
     <div class="context-row" id="east-row" style="display:none">
       <span class="context-label">East (Dealer)?</span>
       <div class="pill-group">
@@ -475,6 +505,19 @@ body {
       </div>
     </div>
   </div>
+
+  <!-- Settings -->
+  <details class="context-card settings-card" id="settings-card">
+    <summary>Settings · Anthropic API key</summary>
+    <div class="context-row">
+      <input type="password" class="key-input" id="api-key-input" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+      <div class="pill-group">
+        <button class="pill" onclick="saveApiKey()">Save</button>
+        <button class="pill" onclick="clearApiKey()">Clear</button>
+      </div>
+    </div>
+    <div class="key-status" id="key-status"></div>
+  </details>
 
   <button class="analyse-btn" id="analyse-btn" onclick="analyseHand()" disabled>
     <span id="btn-text">📷 Upload a photo to analyse</span>
@@ -512,7 +555,7 @@ body {
         <div class="payout-col">
           <div class="pc-label">Self-pick each pays</div>
           <div class="pc-value" id="pay-self">—</div>
-          <div class="pc-sub"></div>
+          <div class="pc-sub" id="pay-self-sub"></div>
         </div>
       </div>
     </div>
@@ -538,6 +581,43 @@ const NEW_TABLE = {0:1,1:2,2:4,3:8,4:16,5:24,6:32,7:48,8:64,9:96,10:128,11:192,1
 const NEW_MAX = 384;
 const CLASSICAL_BANDS = [[0,0,1],[1,1,2],[2,2,4],[3,3,8],[4,6,16],[7,9,32],[10,12,64]];
 const CLASSICAL_MAX = 128;
+
+// The user's own Anthropic API key lives only in this browser's localStorage.
+const API_KEY_STORAGE = 'hkmj_anthropic_api_key';
+
+function getApiKey() {
+  try { return localStorage.getItem(API_KEY_STORAGE) || ''; } catch (e) { return ''; }
+}
+
+function renderKeyStatus() {
+  const key = getApiKey();
+  document.getElementById('key-status').textContent = key
+    ? `Key saved in this browser (…${key.slice(-4)}). It is sent only to api.anthropic.com.`
+    : 'No key saved. Paste your Anthropic API key to scan photos outside Claude. It is stored only in this browser (localStorage).';
+  document.getElementById('settings-card').open = !key;
+}
+
+function saveApiKey() {
+  const input = document.getElementById('api-key-input');
+  const key = input.value.trim();
+  if (!key) return;
+  try { localStorage.setItem(API_KEY_STORAGE, key); } catch (e) {
+    document.getElementById('key-status').textContent = 'Could not save: this browser is blocking local storage.';
+    return;
+  }
+  input.value = '';
+  renderKeyStatus();
+}
+
+function clearApiKey() {
+  try { localStorage.removeItem(API_KEY_STORAGE); } catch (e) {}
+  document.getElementById('api-key-input').value = '';
+  renderKeyStatus();
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 
 function toPoints(fan, mode) {
   const f = Math.min(fan, 13);
@@ -647,6 +727,9 @@ function buildWinContext() {
   if (isPillActive('win-dkong')) parts.push({name:'Double Kong Replacement', cn:'槓上槓', fan:9});
   if (isPillActive('win-rob')) parts.push({name:'Robbing the Kong', cn:'搶槓', fan:1});
   if (isPillActive('win-moon')) parts.push({name:'Moon Under the Sea', cn:'海底撈月', fan:1});
+  if (isPillActive('win-heaven')) parts.push({name:'Blessing of Heaven', cn:'天糊', fan:13});
+  if (isPillActive('win-earth')) parts.push({name:'Blessing of Earth', cn:'地糊', fan:13});
+  if (isPillActive('win-man')) parts.push({name:'Blessing of Man', cn:'人糊', fan:13});
   return parts;
 }
 
@@ -678,47 +761,50 @@ List all melds/sets and the pair (eyes). A hand = 4 melds + 1 pair.
 If the hand is a special hand (Seven Pairs, Thirteen Orphans, Nine Gates), note that.
 
 ## FAN SCORING RULES (Hong Kong Mahjong)
-Score ONLY what applies. Indented items REPLACE their parent:
+Score ONLY what applies. Criteria stack (add up) unless a rule below says one REPLACES another.
 
-HAND TYPE:
+SET TYPE (at most one applies):
 - All Sequences (平糊): 1 fan — every meld is a sequence
 - All Triplets (對對糊): 3 fan — every meld is a triplet/quad
-  - All Concealed Triplets (四暗刻): 8 fan — replaces All Triplets (self-pick or pair from discard only)
-  - All Quadruplets (十八羅漢): 13 fan LIMIT — replaces All Triplets
+- All Concealed Triplets (坎坎糊): 8 fan — all triplets, none taken from other players (self-pick, or discard for the pair only). REPLACES All Triplets
+- All Quadruplets (十八羅漢): 13 fan — four quads. REPLACES All Triplets
 
-SPECIAL TILE MELDS (stack where applicable):
-- Each Dragon triplet (三元牌): 1 fan each
-  - Small Three Dragons (小三元): 5 fan — 2 dragon triplets + pair of 3rd (replaces dragon fan)
-  - Big Three Dragons (大三元): 8 fan LIMIT — 3 dragon triplets (replaces dragon fan)
-- Round/Seat Wind triplet (圈風/門風): 1 fan each (2 fan if same wind is both)
-  - Small Four Winds (小四喜): 6 fan — 3 wind triplets + pair of 4th
-  - Big Four Winds (大四喜): 13 fan LIMIT — 4 wind triplets
+HONOURS:
+- Dragon triplet (三元牌): 1 fan each
+- Small Three Dragons (小三元): 5 fan — 2 dragon triplets + pair of the 3rd. REPLACES the individual dragon fan
+- Big Three Dragons (大三元): 8 fan — 3 dragon triplets. REPLACES Small Three Dragons and the individual dragon fan
+- Round Wind (圈風) / Seat Wind (門風) triplet: 1 fan each; 2 fan if the same wind is both
+- Small Four Winds (小四喜): 6 fan — 3 wind triplets + pair of the 4th. REPLACES the Round/Seat Wind fan
+- Big Four Winds (大四喜): 13 fan — 4 wind triplets. REPLACES Small Four Winds and the Round/Seat Wind fan
 
-FLUSH / SUIT:
+FLUSH / TERMINALS:
 - Mixed Flush (混一色): 3 fan — one suit + honours
-  - Full Flush (清一色): 7 fan — one suit only (replaces Mixed Flush)
-- Mixed Terminals (混么九): 4 fan — only 1s, 9s, honours (All Triplets included)
-  - All Terminals (清么九): 13 fan LIMIT (All Triplets included; replaces Mixed Terminals)
-- All Honours (字一色): 10 fan (All Triplets included; replaces Mixed Terminals)
+- Full Flush (清一色): 7 fan — one suit only. REPLACES Mixed Flush
+- Mixed Terminals (么九): 4 fan — only 1s, 9s and honours. Already includes All Triplets (do not also score All Triplets)
+- All Terminals (清么九): 13 fan — only 1s and 9s. REPLACES Mixed Terminals; already includes All Triplets
+- All Honours (字一色): 10 fan — only honour tiles. REPLACES Mixed Terminals; already includes All Triplets
 
-SPECIAL HANDS (these are limit hands or high-value):
+SPECIAL HANDS:
 - Seven Pairs (七對子): 4 fan — can stack with All Honours, Mixed Flush, Full Flush
-- Thirteen Orphans (十三么): 13 fan LIMIT
-- Nine Gates (九子連環): 13 fan LIMIT — 1112345678999 of one suit, concealed
+- Thirteen Orphans (十三么): 13 fan
+- Nine Gates (九子連環): 13 fan — 1112345678999 of one suit plus any 14th tile of that suit, concealed
 
-FLOWERS/SEASONS:
+FLOWERS / SEASONS:
 - No Flowers or Seasons (無花): 1 fan
-- Seat Flower or Season (正花): 1 fan each
-- All Flowers or All Seasons (一樓花): 2 fan (all four of either set)
-- Seven Flowers (花糊): 3 fan
-- Eight Flowers (大花糊): 8 fan LIMIT
+- Seat Flower or Season (正花): 1 fan for each flower/season matching the winner's seat
+- All Flowers or All Seasons (一台花): 2 fan — all four of either set
+- Seven Flowers (七枝花): 3 fan
+- Eight Flowers (八枝花): 8 fan
+
+DO NOT SCORE (the user sets these manually and they are added separately):
+Self-Pick, Kong Replacement, Double Kong Replacement, Robbing the Kong, Concealed Hand, Moon Under the Sea, Blessing of Heaven, Blessing of Earth, Blessing of Man.
 
 WIN CONTEXT (already provided by user, do NOT re-score these):
 ${winCtxText}
 
 ## STACKING RULES
-- Multiple criteria stack (add up) unless one REPLACES another
-- If fan >= 13 it is a LIMIT hand
+- Multiple criteria stack (add up) unless one REPLACES another (e.g. All Triplets 3 + Full Flush 7 = 10)
+- A total of 13 fan or more is a LIMIT hand; set "is_limit": true only on items worth 13 fan
 - Be precise — do not award fan for criteria not clearly met
 
 ## OUTPUT FORMAT
@@ -736,16 +822,25 @@ Respond ONLY with valid JSON, no markdown, no explanation outside JSON:
   "notes": "Any important observations, warnings, ambiguous tiles, or edge cases"
 }
 
-The total_fan_from_hand should NOT include win context fan (self-pick, concealed, etc.) — those are handled separately.
+total_fan_from_hand must equal the sum of fan_items and must NOT include any win-context fan — those are handled separately.
 If you cannot clearly identify the tiles, still try your best and note the uncertainty in "notes".`;
+
+  const apiKey = getApiKey();
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) {
+    headers['x-api-key'] = apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+    headers['anthropic-dangerous-direct-browser-access'] = 'true';
+  }
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
+        model: 'claude-sonnet-5-5',
+        // Sonnet 5.5 thinks by default and thinking counts toward max_tokens
+        max_tokens: 16000,
         messages: [{
           role: 'user',
           content: [
@@ -757,9 +852,17 @@ If you cannot clearly identify the tiles, still try your best and note the uncer
     });
 
     const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
+    if (data.error) {
+      if (!apiKey && (response.status === 401 || /api[- ]?key/i.test(data.error.message || ''))) {
+        document.getElementById('settings-card').open = true;
+        throw new Error('Add your Anthropic API key in Settings below to scan photos.');
+      }
+      throw new Error(data.error.message);
+    }
+    if (data.stop_reason === 'refusal') throw new Error('The AI declined to analyse this photo. Please try another photo.');
+    if (data.stop_reason === 'max_tokens') throw new Error('The AI response was cut off. Please try again.');
 
-    const rawText = data.content.map(c => c.text || '').join('');
+    const rawText = (data.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
     let parsed;
     try {
       const clean = rawText.replace(/```json|```/g,'').trim();
@@ -771,8 +874,14 @@ If you cannot clearly identify the tiles, still try your best and note the uncer
     renderResult(parsed);
 
   } catch(err) {
+    let msg = err.message;
+    // Without a key the browser blocks the request outside Claude's artifact viewer
+    if (!apiKey && err instanceof TypeError) {
+      document.getElementById('settings-card').open = true;
+      msg = 'Add your Anthropic API key in Settings below to scan photos.';
+    }
     document.getElementById('error-box').style.display = 'block';
-    document.getElementById('error-box').textContent = '⚠ ' + err.message;
+    document.getElementById('error-box').textContent = '⚠ ' + msg;
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<span id="btn-text">✦ Re-analyse 重新分析</span>';
@@ -782,7 +891,8 @@ If you cannot clearly identify the tiles, still try your best and note the uncer
 function renderResult(data) {
   const winCtx = buildWinContext();
   const winFan = winCtx.reduce((s,w)=>s+w.fan, 0);
-  const handFan = data.total_fan_from_hand || 0;
+  const handItems = Array.isArray(data.fan_items) ? data.fan_items : [];
+  const handFan = handItems.reduce((s,i)=>s+(Number(i.fan)||0), 0);
   const totalFan = handFan + winFan;
   const isEastActive = tableMode === 'classical' && isPillActive('is-east');
   const pts = toPoints(totalFan, tableMode);
@@ -796,11 +906,10 @@ function renderResult(data) {
   if (tableMode === 'classical') {
     if (isEastActive) {
       eachPays *= 2; discardPays *= 2; selfPays *= 2;
-      eachSub = '×2 East wins'; discardSub = '×4 East+discard'; selfSub = '×4 East+self';
+      eachSub = '×2 East wins'; discardSub = '×2 East wins'; selfSub = '×2 East wins';
     } else {
-      eachSub = 'each player'; discardSub = 'discarder only'; selfSub = 'all players';
+      eachSub = 'each player · East pays ×2'; discardSub = 'discarder · East pays ×2'; selfSub = 'all players · East pays ×2';
     }
-    if (winType === 'self') { eachPays *= 2; eachSub += ' (self-pick)'; }
   } else {
     eachSub = '新式 · each player';
     discardSub = 'discarder only · 全銃制';
@@ -809,7 +918,7 @@ function renderResult(data) {
 
   // Tiles raw
   document.getElementById('tiles-raw').innerHTML =
-    '<strong>Tiles identified:</strong> ' + (data.tiles_identified || 'See melds below');
+    '<strong>Tiles identified:</strong> ' + escapeHtml(data.tiles_identified || 'See melds below');
 
   // Fan number
   document.getElementById('fan-number').textContent = totalFan;
@@ -818,10 +927,11 @@ function renderResult(data) {
   document.getElementById('pay-self').textContent = selfPays + ' pt' + (selfPays!==1?'s':'');
   document.getElementById('pay-each-sub').textContent = eachSub;
   document.getElementById('pay-discard-sub').textContent = discardSub;
+  document.getElementById('pay-self-sub').textContent = selfSub;
   document.getElementById('result-table-tag').textContent = tableMode === 'new' ? 'New Style 新式' : 'Classical 古式';
 
   // Fan breakdown list
-  const allFanItems = [...(data.fan_items || []), ...winCtx.map(w=>({name:w.name,cn:w.cn,fan:w.fan,is_limit:false,note:'win action'}))];
+  const allFanItems = [...handItems, ...winCtx.map(w=>({name:w.name,cn:w.cn,fan:w.fan,is_limit:false,note:'win action'}))];
   const listEl = document.getElementById('fan-list');
   listEl.innerHTML = '';
   if (allFanItems.length === 0) {
@@ -831,10 +941,10 @@ function renderResult(data) {
       const row = document.createElement('div');
       row.className = 'fan-item';
       row.innerHTML = `
-        <span class="fan-badge${item.is_limit?' limit':''}">${item.fan}</span>
-        <span class="fan-name">${item.name}</span>
-        <span class="fan-cn">${item.cn||''}</span>
-        ${item.note ? '<span class="fan-note"> · '+item.note+'</span>' : ''}
+        <span class="fan-badge${item.is_limit?' limit':''}">${escapeHtml(item.fan)}</span>
+        <span class="fan-name">${escapeHtml(item.name)}</span>
+        <span class="fan-cn">${escapeHtml(item.cn)}</span>
+        ${item.note ? '<span class="fan-note"> · '+escapeHtml(item.note)+'</span>' : ''}
       `;
       listEl.appendChild(row);
     });
@@ -858,6 +968,8 @@ function renderResult(data) {
 
   document.getElementById('result-panel').classList.add('visible');
 }
+
+renderKeyStatus();
 </script>
 </body>
 </html>
